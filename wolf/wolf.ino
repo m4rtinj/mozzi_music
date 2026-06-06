@@ -4,11 +4,11 @@
   * 
   * 4 Potentiometers (A0, A1, A2, A4) + 1 Button (D3)
   * 
-  * A0-Normal: Mix ( Bass <==>Pad )
-  * A0-Button: Change scale
+  * A0-Normal: Mix ( Bass <==> Pad )
+  * A0-Button: Swing (0 - 50% of step length)
   * 
   * A1-Normal: Note change speed (200 - 4)
-  * A1-Button: Shift melody )
+  * A1-Button: Shift melody 
   * 
   * A2-Normal: Pad note length (5 - 250 ms)
   * A2-Button: Bass note length (5 - 250 ms) * 2
@@ -54,12 +54,12 @@ const byte scaleSize = 14;
 const byte numScales = 6;
 
 const byte scales[numScales][scaleSize] = {
-    {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52, 54, 55}, // G-dur / A-dor
-    {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51, 53, 54}, // Szintetikus
-    {36, 38, 40, 42, 43, 45, 47, 50, 52, 54, 55, 57, 59, 62}, // C-lid
-    {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51, 53, 55}, // A-moll
-    {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60, 62, 64}, // A-pentaton
-    {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55, 57, 60}  // A-blues
+  {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60, 62, 64}, // A-pentaton
+  {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51, 53, 55}, // A-moll
+  {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55, 57, 60}, // A-blues
+  {36, 38, 40, 42, 43, 45, 47, 50, 52, 54, 55, 57, 59, 62}, // C-lid
+  {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51, 53, 54}, // Szintetikus
+  {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52, 54, 55}  // G-dur / A-dor
 };
 
 // Step probability array for melody generation and mutation
@@ -81,6 +81,7 @@ unsigned long shortPressThreshold = 800000; // 200 ms
 
 unsigned int ticks = 0;
 unsigned int stepLength = 300; 
+byte swing = 0;
 byte noteIndex = 0;
 
 long bassGain = 200;
@@ -184,7 +185,7 @@ void updateControl() {
   if (abs(newA0 - oldA0) > minAnalogChange) {  // Only update if the value has changed significantly
     oldA0 = newA0;  // Update oldA0 to the new value 
     if (buttonState == PRESSED) {
-      mixPot = newA0 * 2; 
+      swing = map(newA0, 0, 1023, 0, 128);
     } else {
       mixPot = newA0; 
     } 
@@ -224,15 +225,17 @@ void updateControl() {
       lpf.setCutoffFreq(map(newA4, 0, 1023, 10, 245)); 
     }
   }
-  
- 
+
   // LFO modulation
   // long bassVolumeMod = map(lfoBass.next(), -127, 128, 40, 255);
   // long padVolumeMod = map(lfoPad.next(), -127, 128, 20, 255);
   
   // Note change timing
   ticks++;
-  if (ticks >= stepLength) {
+
+  int swingOffset = (swing * stepLength) >> 8; // Calculate swing offset based on the swing value
+  int finaltick = stepLength + ((noteIndex % 2 == 0) ? swingOffset : -swingOffset); // Adjust step length based on swing and note index
+  if (ticks >= finaltick) {
     ticks = 0;
     if (random(5, 250) < mutationSpeed) {
       mutateMelody();
