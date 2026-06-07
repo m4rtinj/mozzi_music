@@ -38,7 +38,7 @@
 #define MAX_STEP_LENGTH CONTROL_RATE * 16 // 1024 ms at CONTROL_RATE of 64
 #define BUTTON_PIN 3                     
 #define PRESSED LOW
-#define minAnalogChange 3
+#define MIN_ANALOG_CHANGE 3
 #define REST 99
 #define MELODY_LENGTH 16
 #define BUTTON_DEBOUCER_BYTE 0x1F // 
@@ -166,23 +166,16 @@ void nextNote(){
   noteIndex = (noteIndex + 1) % 16;
 }
 
-
-void updateButtonState(){
-  buttonDebouncer = ((buttonDebouncer << 1) | (uint8_t)(!digitalRead(BUTTON_PIN))) & 0xFF;
-  lastButtonState = buttonState;
-  if (buttonDebouncer == 0xFF) {
-    buttonState = PRESSED;
-  } else if (buttonDebouncer == 0x00) {
-    buttonState = !PRESSED;
-  }
-}
-
-
 void updateControl() {
   
   // Button handling
-  updateButtonState();
-  if (buttonState == PRESSED && lastButtonState == !PRESSED) {
+  buttonDebouncer = ((buttonDebouncer << 1) | (uint8_t)(!digitalRead(BUTTON_PIN))) & BUTTON_DEBOUCER_BYTE;
+  lastButtonState = buttonState;
+  if (buttonDebouncer ==  BUTTON_DEBOUCER_BYTE) {
+    buttonState = PRESSED;
+  } else if (buttonDebouncer == 0) {
+    buttonState = !PRESSED;
+  }  if (buttonState == PRESSED && lastButtonState == !PRESSED) {
     if (mozziMicros() - lastButtonPressedTime < shortPressThreshold) { 
       currentScale = (currentScale + 1) % numScales;
       generateNewMelody(); 
@@ -194,8 +187,8 @@ void updateControl() {
 
   // handle A0 with or without button press - only if A0 was moved! (using oldA0)
   int newA0 = mozziAnalogRead(A0);
-  if (abs(newA0 - oldA0) > minAnalogChange) {  // Only update if the value has changed significantly
-    oldA0 = newA0;  // Update oldA0 to the new value 
+  if (abs(newA0 - oldA0) > MIN_ANALOG_CHANGE) {
+    oldA0 = newA0;
     if (buttonState == PRESSED) {
       swing = map(newA0, 0, 1023, 0, 128);
     } else {
@@ -205,8 +198,8 @@ void updateControl() {
 
   // handle A1 with or without button press - only if A1 was moved! (using oldA1)
   int newA1 = mozziAnalogRead(A1);
-  if (abs(newA1 - oldA1) > minAnalogChange) {  // Only update if the value has changed significantly
-    oldA1 = newA1;  // Update oldA1 to the new value 
+  if (abs(newA1 - oldA1) > MIN_ANALOG_CHANGE) {
+    oldA1 = newA1;
     if (buttonState == PRESSED) {
       stepLength = map(newA1, 0, 1023, 200, 4) * 2; 
     } else {
@@ -216,21 +209,19 @@ void updateControl() {
 
   // handle A2 with or without button press - only if A2 was moved! (using oldA2)
   int newA2 = mozziAnalogRead(A2);
-  if (abs(newA2 - oldA2) > minAnalogChange) {  // Only update if the value has changed significantly
-    oldA2 = newA2;  // Update oldA2 to the new value 
+  if (abs(newA2 - oldA2) > MIN_ANALOG_CHANGE) {
+    oldA2 = newA2;
     if (buttonState == PRESSED) {
-      bassNotelength = map(newA2, 0, 1023, 5, 250);
       padNotelength = map(newA2, 0, 1023, 5, 250); 
     } else {
       bassNotelength = map(newA2, 0, 1023, 5, 250);
-      padNotelength = map(newA2, 0, 1023, 5, 250); 
     }
   }
 
   // handle A4 with or without button press - only if A4 was moved! (using oldA4)
   int newA4 = mozziAnalogRead(A4);
-  if (abs(newA4 - oldA4) > minAnalogChange) {  // Only update if the value has changed significantly
-    oldA4 = newA4;  // Update oldA4 to the new value 
+  if (abs(newA4 - oldA4) > MIN_ANALOG_CHANGE) {
+    oldA4 = newA4;
     if (buttonState ==  PRESSED) {
       mutationSpeed = map(newA4, 0, 1023, 0, 255); // in ticks
     } else {
@@ -245,8 +236,8 @@ void updateControl() {
   // Note change timing
   ticks++;
 
-  int swingOffset = (swing * stepLength) >> 8; // Calculate swing offset based on the swing value
-  int finaltick = stepLength + ((noteIndex % 2 == 0) ? swingOffset : -swingOffset); // Adjust step length based on swing and note index
+  int swingOffset = (swing * stepLength) >> 8;
+  int finaltick = stepLength + ((noteIndex % 2 == 0) ? swingOffset : -swingOffset);
   if (ticks >= finaltick) {
     ticks = 0;
     if (random(5, 250) < mutationSpeed) {
@@ -265,7 +256,7 @@ void updateControl() {
     padGain = 0; 
   }
   if (melody[noteIndex] == REST) {
-    //bassGain = 0; 
+    // bassGain = 0; 
     padGain = 0; 
   }
 }
