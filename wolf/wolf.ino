@@ -20,39 +20,44 @@
   *  
   */
 
+
 #include <MozziGuts.h>
 #include <Oscil.h>
-#include <LowPassFilter.h>
 #include <tables/sin2048_int8.h>
 #include <tables/saw8192_int8.h>
-//#include <tables/sin8192_int8.h>
 #include <tables/smoothsquare8192_int8.h> 
+//#include <tables/sin8192_int8.h>
+#include <LowPassFilter.h>
 #include <mozzi_midi.h>
-//#include <EventDelay.h> 
 
+
+// Configuration constants
+//=============================================================================
 #define CONTROL_RATE 64
-
 #define MAX_NOTE_LENGTH CONTROL_RATE * 16 // 1024 ms at CONTROL_RATE of 64
 #define MAX_STEP_LENGTH CONTROL_RATE * 16 // 1024 ms at CONTROL_RATE of 64
-
 #define BUTTON_PIN 3                     
 #define PRESSED LOW
 #define minAnalogChange 3
 #define REST 99
 #define MELODY_LENGTH 16
+#define BUTTON_DEBOUCER_BYTE 0x1F // 
 
+
+// Mozzi oscillators + low pass filter
+//=============================================================================
 Oscil<SAW8192_NUM_CELLS, AUDIO_RATE> aPad(SAW8192_DATA); 
-//Oscil<SIN8192_NUM_CELLS, AUDIO_RATE> aBass(SIN8192_DATA);
 Oscil<SMOOTHSQUARE8192_NUM_CELLS, AUDIO_RATE> aBass(SMOOTHSQUARE8192_DATA);
-LowPassFilter lpf;
-
 Oscil<SIN2048_NUM_CELLS, CONTROL_RATE> lfoBass(SIN2048_DATA);
 Oscil<SIN2048_NUM_CELLS, CONTROL_RATE> lfoPad(SIN2048_DATA);
+//Oscil<SIN8192_NUM_CELLS, AUDIO_RATE> aBass(SIN8192_DATA);
+LowPassFilter lpf;
 
-byte currentScale = 0; 
+
+// Scales with MIDI notes
+//=============================================================================
 const byte scaleSize = 14;
 const byte numScales = 6;
-
 const byte scales[numScales][scaleSize] = {
   {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60, 62, 64}, // A-pentaton
   {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51, 53, 55}, // A-moll
@@ -62,16 +67,21 @@ const byte scales[numScales][scaleSize] = {
   {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52, 54, 55}  // G-dur / A-dor
 };
 
-// Step probability array for melody generation and mutation
+// 
+//=============================================================================
 byte stepsSize = 9;
 const int steps[] = {-2, 2, -1, -1, 1, 1, 0, REST, REST};
-int step;
 
-// Melody array includes note indexes and not the notes! 
+
+// Variables
+//=============================================================================
 byte melody[MELODY_LENGTH];
 
+byte currentScale = 0; 
+int step;
+
 int oldA0 = 0, oldA1 = 0, oldA2 = 0, oldA4 = 0;
-int mixPot, lfoPot, bpmPo, lpfPot;
+int mixPot;
 
 byte buttonDebouncer = 0;
 bool buttonState = HIGH;
@@ -91,6 +101,10 @@ int padNotelength = 200;
 
 byte mutationSpeed = 20; // in ticks
 
+
+// Functions
+//=============================================================================
+
 void setup() {
   pinMode(BUTTON_PIN, INPUT_PULLUP);     
   pinMode(LED_BUILTIN, OUTPUT);          
@@ -108,45 +122,41 @@ void setup() {
 
 }
 
-void generateNewMelody() {
-  byte idx = 0; //random(0, scaleSize);
-  for (int i = 0; i < MELODY_LENGTH; i++) {
-    step = steps[random(0, stepsSize)];
-    if (step == REST) {
-      melody[i] = REST; 
-    } else {
-      idx = (idx + step);
-      if (idx < 0) {
-        idx = 0;
-      }
-      if (idx >= scaleSize){
-        idx = scaleSize-1;
-      }
-      melody[i] = idx;
+byte generateNewNoteIndex(byte idx) {
+  if (idx == REST) {
+    return random(0, scaleSize); 
+  }
+  int step = steps[random(0, stepsSize)];
+  if (step == REST) {
+    return REST; 
+  } else {
+    int newIndex = idx + step;
+    if (newIndex < 0) {
+      newIndex = 0;    
     }
+    if (newIndex >= scaleSize){
+      newIndex = scaleSize-1;
+    }
+    return newIndex;
   }
 }
 
-void mutateMelody() {
-  byte idx = random(0, MELODY_LENGTH);
-  step = steps[random(0, stepsSize)];
-  if (step == REST) {
-    melody[idx] = REST; 
-  } else {
-    if (melody[idx] = REST) { 
-      melody[idx] = random(0, scaleSize); // If it's currently a pause, change it to a random note
-    } else {
-      int newIdx = melody[idx] + step;
-      if (newIdx < 0) {
-        newIdx = 0;    
-      }
-      if (newIdx >= scaleSize){
-        newIdx = scaleSize-1;
-      }
-      melody[idx] = newIdx;
-    }
+
+void generateNewMelody() {
+  byte noteIdx = random(0, scaleSize);
+  for (int i = 0; i < MELODY_LENGTH; i++) {
+    noteIdx = generateNewNoteIndex(noteIdx);
+    melody[i] = noteIdx;
   }
 }
+
+
+void mutateMelody() {
+  byte pos = random(0, MELODY_LENGTH);
+  byte idx = melody[pos];
+  melody[pos] = generateNewNoteIndex(idx);
+}
+
 
 void nextNote(){
   if (melody[noteIndex] != REST) {
@@ -155,6 +165,7 @@ void nextNote(){
   }
   noteIndex = (noteIndex + 1) % 16;
 }
+
 
 void updateButtonState(){
   buttonDebouncer = ((buttonDebouncer << 1) | (uint8_t)(!digitalRead(BUTTON_PIN))) & 0xFF;
@@ -165,6 +176,7 @@ void updateButtonState(){
     buttonState = !PRESSED;
   }
 }
+
 
 void updateControl() {
   
@@ -258,10 +270,12 @@ void updateControl() {
   }
 }
 
+
 int updateAudio() {
   long mix = ((aBass.next() * bassGain) + (aPad.next() * padGain)) >> 9;  
   return lpf.next((int)(mix));
 }
+
 
 void loop() {
   audioHook();
