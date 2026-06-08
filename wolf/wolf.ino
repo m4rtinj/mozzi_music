@@ -34,8 +34,8 @@
 // Configuration constants
 //=============================================================================
 #define CONTROL_RATE 64
-#define MAX_NOTE_LENGTH CONTROL_RATE * 16 // 1024 ms at CONTROL_RATE of 64
-#define MAX_STEP_LENGTH CONTROL_RATE * 16 // 1024 ms at CONTROL_RATE of 64
+#define MAX_NOTE_LENGTH (CONTROL_RATE * 16) // 1024 ms at CONTROL_RATE of 64
+#define MAX_STEP_LENGTH (CONTROL_RATE * 16) // 1024 ms at CONTROL_RATE of 64
 #define BUTTON_PIN 3                     
 #define PRESSED LOW
 #define MIN_ANALOG_CHANGE 3
@@ -56,49 +56,48 @@ LowPassFilter lpf;
 
 // Scales with MIDI notes
 //=============================================================================
-const byte scaleSize = 14;
+const byte scaleLength = 12;
 const byte numScales = 6;
-const byte scales[numScales][scaleSize] = {
-  {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60, 62, 64}, // A-pentaton
-  {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51, 53, 55}, // A-moll
-  {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55, 57, 60}, // A-blues
-  {36, 38, 40, 42, 43, 45, 47, 50, 52, 54, 55, 57, 59, 62}, // C-lid
-  {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51, 53, 54}, // Szintetikus
-  {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52, 54, 55}  // G-dur / A-dor
+const byte scales[numScales][scaleLength] = {
+  {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60}, // A-pentaton
+  {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51}, // A-moll
+  {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55}, // A-blues
+  {36, 38, 40, 42, 43, 45, 47, 50, 52, 54, 55, 57}, // C-lid
+  {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51}, // Szintetikus
+  {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52}  // A-dor
 };
 
-// 
+// Steps for melody generation
 //=============================================================================
-byte stepsSize = 9;
-const int steps[] = {-2, 2, -1, -1, 1, 1, 0, REST, REST};
+const byte numOffsets = 9;
+const int offsets[numOffsets] = {-2, 2, -1, -1, 1, 1, 0, REST, REST};
 
 
 // Variables
 //=============================================================================
-byte melody[MELODY_LENGTH];
 
-byte currentScale = 0; 
-int step;
-
+// Read digital and analog inputs
 int oldA0 = 0, oldA1 = 0, oldA2 = 0, oldA4 = 0;
-int mixPot;
-
 byte buttonDebouncer = 0;
 bool buttonState = HIGH;
 bool lastButtonState = HIGH;
 unsigned long lastButtonPressedTime = 0;
-unsigned long shortPressThreshold = 800000; // 200 ms
+unsigned long shortPressThreshold = 800000; // 800 ms in microseconds
 
-unsigned int ticks = 0;
-unsigned int stepLength = 300; 
-byte swing = 0;
-byte noteIndex = 0;
+// Melody playback
+unsigned long int ticks = 0;
+byte currentScale = 0; 
+byte melody[MELODY_LENGTH];
+byte melodyStep = 0;
 
-long bassGain = 200;
-long padGain = 200;
-int bassNotelength = 200;
-int padNotelength = 200;
-
+// Configurable parameters
+unsigned int mixPot = 512; // 0: only bass, 1023: only pad
+unsigned int stepLength = 300; // in ticks
+byte swing = 0; // 0: no swing, 128: 50% swing (max)
+byte bassGain = 200; // 0: silent, 255: full volume
+byte padGain = 200; // 0: silent, 255: full volume
+int bassNotelength = 200; // in ticks
+int padNotelength = 200; // in ticks
 byte mutationSpeed = 20; // in ticks
 
 
@@ -108,25 +107,19 @@ byte mutationSpeed = 20; // in ticks
 void setup() {
   pinMode(BUTTON_PIN, INPUT_PULLUP);     
   pinMode(LED_BUILTIN, OUTPUT);          
-  
   randomSeed(analogRead(A5));            
   startMozzi(CONTROL_RATE);
-  
   lfoBass.setFreq(0.25f);    
   lfoPad.setFreq(0.15f); 
-  
-  lpf.setResonance(180); 
-
-  currentScale = 0;
+  lpf.setResonance(120); 
   generateNewMelody();
-
 }
 
 byte generateNewNoteIndex(byte idx) {
   if (idx == REST) {
-    return random(0, scaleSize); 
+    return random(0, scaleLength); 
   }
-  int step = steps[random(0, stepsSize)];
+  int step = offsets[random(0, numOffsets)];
   if (step == REST) {
     return REST; 
   } else {
@@ -134,8 +127,8 @@ byte generateNewNoteIndex(byte idx) {
     if (newIndex < 0) {
       newIndex = 0;    
     }
-    if (newIndex >= scaleSize){
-      newIndex = scaleSize-1;
+    if (newIndex >= scaleLength){
+      newIndex = scaleLength-1;
     }
     return newIndex;
   }
@@ -143,7 +136,7 @@ byte generateNewNoteIndex(byte idx) {
 
 
 void generateNewMelody() {
-  byte noteIdx = random(0, scaleSize);
+  byte noteIdx = random(0, scaleLength);
   for (int i = 0; i < MELODY_LENGTH; i++) {
     noteIdx = generateNewNoteIndex(noteIdx);
     melody[i] = noteIdx;
@@ -159,11 +152,11 @@ void mutateMelody() {
 
 
 void nextNote(){
-  if (melody[noteIndex] != REST) {
-    aPad.setFreq(mtof(scales[currentScale][melody[noteIndex]]));
-    aBass.setFreq(mtof(scales[currentScale][melody[noteIndex]])); 
+  if (melody[melodyStep] != REST) {
+    aPad.setFreq(mtof(scales[currentScale][melody[melodyStep]]));
+    aBass.setFreq(mtof(scales[currentScale][melody[melodyStep]])); 
   }
-  noteIndex = (noteIndex + 1) % 16;
+  melodyStep = (melodyStep + 1) % MELODY_LENGTH;
 }
 
 void updateControl() {
@@ -237,7 +230,7 @@ void updateControl() {
   ticks++;
 
   int swingOffset = (swing * stepLength) >> 8;
-  int finaltick = stepLength + ((noteIndex % 2 == 0) ? swingOffset : -swingOffset);
+  int finaltick = stepLength + ((melodyStep % 2 == 0) ? swingOffset : -swingOffset);
   if (ticks >= finaltick) {
     ticks = 0;
     if (random(5, 250) < mutationSpeed) {
@@ -255,7 +248,7 @@ void updateControl() {
   if (ticks > padNotelength) {
     padGain = 0; 
   }
-  if (melody[noteIndex] == REST) {
+  if (melody[melodyStep] == REST) {
     // bassGain = 0; 
     padGain = 0; 
   }
