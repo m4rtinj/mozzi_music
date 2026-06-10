@@ -7,11 +7,11 @@
   * A0-Normal: Mix ( Bass <==> Pad )
   * A0-Button: Swing (0 - 50% of step length)
   * 
-  * A1-Normal: Note change speed (200 - 4)
-  * A1-Button: Shift melody 
+  * A1-Normal: Note length
+  * A1-Button: Note change speed 
   * 
-  * A2-Normal: Pad note length (5 - 250 ms)
-  * A2-Button: Bass note length (5 - 250 ms) * 2
+  * A2-Normal: Lfo frequency
+  * A2-Button: Lfo amounth
   * 
   * A4-Normal: LPF cutoff (10 - 245)
   * A4-Button: Mutation speed
@@ -34,13 +34,13 @@
 // Configuration constants
 //=============================================================================
 #define CONTROL_RATE 64
-#define MAX_NOTE_LENGTH (CONTROL_RATE * 16) // 1024 ms at CONTROL_RATE of 64
-#define MAX_STEP_LENGTH (CONTROL_RATE * 16) // 1024 ms at CONTROL_RATE of 64
+#define MAX_NOTE_LENGTH 64 // in ticks; 4096 ms at CONTROL_RATE=64
+#define MAX_STEP_LENGTH 64 // in ticks; 4096 ms at CONTROL_RATE=64
 #define BUTTON_PIN 3                     
 #define PRESSED LOW
 #define MIN_ANALOG_CHANGE 3
 #define REST 99
-#define MELODY_LENGTH 16
+#define MELODY_LENGTH 16  // must be a power of 2 for easier modulo operation
 #define BUTTON_DEBOUCER_BYTE 0x1F // 
 
 
@@ -48,8 +48,7 @@
 //=============================================================================
 Oscil<SAW8192_NUM_CELLS, AUDIO_RATE> aPad(SAW8192_DATA); 
 Oscil<SMOOTHSQUARE8192_NUM_CELLS, AUDIO_RATE> aBass(SMOOTHSQUARE8192_DATA);
-Oscil<SIN2048_NUM_CELLS, CONTROL_RATE> lfoBass(SIN2048_DATA);
-Oscil<SIN2048_NUM_CELLS, CONTROL_RATE> lfoPad(SIN2048_DATA);
+//Oscil<SIN2048_NUM_CELLS, CONTROL_RATE> lfo(SIN2048_DATA);
 //Oscil<SIN8192_NUM_CELLS, AUDIO_RATE> aBass(SIN8192_DATA);
 LowPassFilter lpf;
 
@@ -85,21 +84,21 @@ unsigned long lastButtonPressedTime = 0;
 unsigned long shortPressThreshold = 800000; // 800 ms in microseconds
 
 // Melody playback
-unsigned long int ticks = 0;
+unsigned int ticks = 0;
 byte currentScale = 0; 
 byte melody[MELODY_LENGTH];
 byte melodyStep = 0;
 
 // Configurable parameters
 unsigned int mixPot = 512; // 0: only bass, 1023: only pad
-unsigned int stepLength = 300; // in ticks
+unsigned int stepLength = 36; // in ticks
 byte swing = 0; // 0: no swing, 128: 50% swing (max)
-byte bassGain = 200; // 0: silent, 255: full volume
-byte padGain = 200; // 0: silent, 255: full volume
+unsigned int bassGain = 200; // 0: silent, 1023: full volume
+unsigned int padGain = 200; // 0: silent, 1023: full volume
 int bassNotelength = 200; // in ticks
 int padNotelength = 200; // in ticks
+byte baseNote, detune = 0; // 0: no modulation, 128: full modulation
 byte mutationSpeed = 20; // in ticks
-
 
 // Functions
 //=============================================================================
@@ -109,11 +108,11 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);          
   randomSeed(analogRead(A5));            
   startMozzi(CONTROL_RATE);
-  lfoBass.setFreq(0.25f);    
-  lfoPad.setFreq(0.15f); 
-  lpf.setResonance(120); 
+ // lfo.setFreq(0.25f);    
+  lpf.setResonance(140); 
   generateNewMelody();
 }
+
 
 byte generateNewNoteIndex(byte idx) {
   if (idx == REST) {
@@ -153,11 +152,12 @@ void mutateMelody() {
 
 void nextNote(){
   if (melody[melodyStep] != REST) {
-    aPad.setFreq(mtof(scales[currentScale][melody[melodyStep]]));
-    aBass.setFreq(mtof(scales[currentScale][melody[melodyStep]])); 
+    aPad.setFreq(mtof(baseNote + detune + scales[currentScale][melody[melodyStep]]));
+    aBass.setFreq(mtof(baseNote + scales[currentScale][melody[melodyStep]])); 
   }
-  melodyStep = (melodyStep + 1) % MELODY_LENGTH;
+  melodyStep = (melodyStep + 1) & (MELODY_LENGTH - 1);
 }
+
 
 void updateControl() {
   
@@ -168,7 +168,8 @@ void updateControl() {
     buttonState = PRESSED;
   } else if (buttonDebouncer == 0) {
     buttonState = !PRESSED;
-  }  if (buttonState == PRESSED && lastButtonState == !PRESSED) {
+  }  
+  if (buttonState == PRESSED && lastButtonState == !PRESSED) {
     if (mozziMicros() - lastButtonPressedTime < shortPressThreshold) { 
       currentScale = (currentScale + 1) % numScales;
       generateNewMelody(); 
@@ -194,9 +195,10 @@ void updateControl() {
   if (abs(newA1 - oldA1) > MIN_ANALOG_CHANGE) {
     oldA1 = newA1;
     if (buttonState == PRESSED) {
-      stepLength = map(newA1, 0, 1023, 200, 4) * 2; 
+      stepLength = map(newA1, 0, 1023, 5, MAX_STEP_LENGTH);
     } else {
-      stepLength = map(newA1, 0, 1023, 200, 4); 
+      bassNotelength = map(newA1, 0, 1023, 5, MAX_NOTE_LENGTH);
+      padNotelength = bassNotelength;
     }
   }
 
@@ -205,9 +207,9 @@ void updateControl() {
   if (abs(newA2 - oldA2) > MIN_ANALOG_CHANGE) {
     oldA2 = newA2;
     if (buttonState == PRESSED) {
-      padNotelength = map(newA2, 0, 1023, 5, 250); 
+      detune = map( newA2, 0, 1023, 0, 20 ); 
     } else {
-      bassNotelength = map(newA2, 0, 1023, 5, 250);
+      baseNote = map( newA2, 0, 1023, 0, 20 );  //0..255 
     }
   }
 
@@ -222,10 +224,6 @@ void updateControl() {
     }
   }
 
-  // LFO modulation
-  // long bassVolumeMod = map(lfoBass.next(), -127, 128, 40, 255);
-  // long padVolumeMod = map(lfoPad.next(), -127, 128, 20, 255);
-  
   // Note change timing
   ticks++;
 
@@ -243,7 +241,7 @@ void updateControl() {
   padGain = mixPot >> 2;
   
   if (ticks > bassNotelength) {
-    bassGain = 0; 
+    bassGain = bassGain >> 1 ;
   }
   if (ticks > padNotelength) {
     padGain = 0; 
@@ -256,7 +254,7 @@ void updateControl() {
 
 
 int updateAudio() {
-  long mix = ((aBass.next() * bassGain) + (aPad.next() * padGain)) >> 9;  
+  long mix = ((aBass.next() * bassGain) + (aPad.next() * padGain)) >> 12;  
   return lpf.next((int)(mix));
 }
 
