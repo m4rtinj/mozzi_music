@@ -1,19 +1,19 @@
- /*
+/*
   * Wolf. 
   * A Generative Synthesizer
   * 
   * 4 Potentiometers (A0, A1, A2, A4) + 1 Button (D3)
   * 
-  * A0-Normal: Mix ( Bass <==> Pad )
-  * A0-Button: Swing (0 - 50% of step length)
-  * 
+  * A0-Normal: Mix between bass and pad
+  * A0-Button: Swing amount
+  *
   * A1-Normal: Note length
-  * A1-Button: Note change speed 
+  * A1-Button: Note change speed
   * 
-  * A2-Normal: Lfo frequency
-  * A2-Button: Lfo amounth
-  * 
-  * A4-Normal: LPF cutoff (10 - 245)
+  * A2-Normal: Base note
+  * A2-Button: ADSR release time
+  *
+  * A4-Normal: Low pass filter cutoff
   * A4-Button: Mutation speed
   * 
   * Button double press: generate new melody + change scale
@@ -26,10 +26,9 @@
 #include <tables/sin2048_int8.h>
 #include <tables/saw8192_int8.h>
 #include <tables/smoothsquare8192_int8.h> 
-//#include <tables/sin8192_int8.h>
 #include <LowPassFilter.h>
 #include <mozzi_midi.h>
-
+#include <ADSR.h>
 
 // Configuration constants
 //=============================================================================
@@ -51,6 +50,7 @@ Oscil<SMOOTHSQUARE8192_NUM_CELLS, AUDIO_RATE> aBass(SMOOTHSQUARE8192_DATA);
 //Oscil<SIN2048_NUM_CELLS, CONTROL_RATE> lfo(SIN2048_DATA);
 //Oscil<SIN8192_NUM_CELLS, AUDIO_RATE> aBass(SIN8192_DATA);
 LowPassFilter lpf;
+ADSR<CONTROL_RATE, CONTROL_RATE> envelope;
 
 
 // Scales with MIDI notes
@@ -58,12 +58,12 @@ LowPassFilter lpf;
 const byte scaleLength = 12;
 const byte numScales = 6;
 const byte scales[numScales][scaleLength] = {
-  {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60}, // A-pentaton
-  {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51}, // A-moll
-  {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55}, // A-blues
-  {36, 38, 40, 42, 43, 45, 47, 50, 52, 54, 55, 57}, // C-lid
-  {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51}, // Szintetikus
-  {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52}  // A-dor
+  {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60}, //
+  {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51}, // 
+  {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55}, // 
+  {36, 38, 40, 42, 43, 45, 47, 50, 52, 54, 55, 57}, // 
+  {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51}, // 
+  {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52}  // 
 };
 
 // Steps for melody generation
@@ -90,15 +90,17 @@ byte melody[MELODY_LENGTH];
 byte melodyStep = 0;
 
 // Configurable parameters
-unsigned int mixPot = 512; // 0: only bass, 1023: only pad
-unsigned int stepLength = 36; // in ticks
+unsigned long mixPot = 512; // 0: only bass, 1023: only pad
+unsigned int stepLength = 300; // in ticks
 byte swing = 0; // 0: no swing, 128: 50% swing (max)
-unsigned int bassGain = 200; // 0: silent, 1023: full volume
-unsigned int padGain = 200; // 0: silent, 1023: full volume
-int bassNotelength = 200; // in ticks
-int padNotelength = 200; // in ticks
-byte baseNote, detune = 0; // 0: no modulation, 128: full modulation
+unsigned long env = 0;
+unsigned long bassGain = 200; // 0: silent, 1023: full volume
+unsigned long padGain = 200; // 0: silent, 1023: full volume
+int noteLength = 100; // in ticks
+byte noteOffset = 0; // MIDI note offset for the scale (0..20)
 byte mutationSpeed = 20; // in ticks
+bool noteActive = false;
+
 
 // Functions
 //=============================================================================
@@ -108,9 +110,11 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);          
   randomSeed(analogRead(A5));            
   startMozzi(CONTROL_RATE);
- // lfo.setFreq(0.25f);    
   lpf.setResonance(140); 
+  envelope.setLevels(255, 255, 255, 0);
+  envelope.setTimes(120, 10, 65535, 500);
   generateNewMelody();
+ //  Serial.begin(9600);
 }
 
 
@@ -152,10 +156,15 @@ void mutateMelody() {
 
 void nextNote(){
   if (melody[melodyStep] != REST) {
-    aPad.setFreq(mtof(baseNote + detune + scales[currentScale][melody[melodyStep]]));
-    aBass.setFreq(mtof(baseNote + scales[currentScale][melody[melodyStep]])); 
+    aPad.setFreq(mtof(noteOffset scales[currentScale][melody[melodyStep]]));
+    aBass.setFreq(mtof(noteOffset + scales[currentScale][melody[melodyStep]])); 
+    envelope.noteOn();
+    noteActive = true;
+  } else {
+  //  envelope.noteOff();
+  //  noteActive = false;
   }
-  melodyStep = (melodyStep + 1) & (MELODY_LENGTH - 1);
+  melodyStep = (melodyStep + 1) % MELODY_LENGTH;
 }
 
 
@@ -197,8 +206,7 @@ void updateControl() {
     if (buttonState == PRESSED) {
       stepLength = map(newA1, 0, 1023, 5, MAX_STEP_LENGTH);
     } else {
-      bassNotelength = map(newA1, 0, 1023, 5, MAX_NOTE_LENGTH);
-      padNotelength = bassNotelength;
+      noteLength = map(newA1, 0, 1023, 5, MAX_NOTE_LENGTH);
     }
   }
 
@@ -207,9 +215,9 @@ void updateControl() {
   if (abs(newA2 - oldA2) > MIN_ANALOG_CHANGE) {
     oldA2 = newA2;
     if (buttonState == PRESSED) {
-      detune = map( newA2, 0, 1023, 0, 20 ); 
+      envelope.setReleaseTime( newA2 ); 
     } else {
-      baseNote = map( newA2, 0, 1023, 0, 20 );  //0..255 
+      noteOffset = map( newA2, 0, 1023, 0, 20 );  //0..255 
     }
   }
 
@@ -224,11 +232,21 @@ void updateControl() {
     }
   }
 
+
+  envelope.update();
+
   // Note change timing
   ticks++;
 
   int swingOffset = (swing * stepLength) >> 8;
   int finaltick = stepLength + ((melodyStep % 2 == 0) ? swingOffset : -swingOffset);
+  
+  if (noteActive && (ticks >= noteLength)) {
+    envelope.noteOff();
+    noteActive = false;
+    //Serial.println(9999);
+  }
+
   if (ticks >= finaltick) {
     ticks = 0;
     if (random(5, 250) < mutationSpeed) {
@@ -236,28 +254,22 @@ void updateControl() {
     }
     nextNote();
   }
+  env = envelope.next(); 
+  bassGain = ((1023 - mixPot) * env) >> 10;
+  padGain = (env * mixPot) >> 10;
+  // Serial.print(env);
+  // Serial.print("  ");
+  // Serial.print(mixPot);
+  // Serial.print("  ");
+  // Serial.print(bassGain);
+  // Serial.println("  ");
 
-  bassGain = (1023 - mixPot) >> 2;
-  padGain = mixPot >> 2;
-  
-  if (ticks > bassNotelength) {
-    bassGain = bassGain >> 1 ;
-  }
-  if (ticks > padNotelength) {
-    padGain = 0; 
-  }
-  if (melody[melodyStep] == REST) {
-    // bassGain = 0; 
-    padGain = 0; 
-  }
 }
-
 
 int updateAudio() {
-  long mix = ((aBass.next() * bassGain) + (aPad.next() * padGain)) >> 12;  
-  return lpf.next((int)(mix));
+  long mix = ((aBass.next() * bassGain) + (aPad.next() * padGain)) >> 9;  
+  return lpf.next((int)mix);
 }
-
 
 void loop() {
   audioHook();
