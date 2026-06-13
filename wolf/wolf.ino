@@ -26,18 +26,19 @@
 #include <tables/sin2048_int8.h>
 #include <tables/saw8192_int8.h>
 #include <tables/smoothsquare8192_int8.h> 
+//#include <tables/triangle_hermes_2048_int8.h>
 #include <LowPassFilter.h>
 #include <mozzi_midi.h>
 #include <ADSR.h>
 
 // Configuration constants
 //=============================================================================
-#define CONTROL_RATE 64
-#define MAX_NOTE_LENGTH 64 // in ticks; 4096 ms at CONTROL_RATE=64
-#define MAX_STEP_LENGTH 64 // in ticks; 4096 ms at CONTROL_RATE=64
+#define CONTROL_RATE 128
+#define MAX_NOTE_LENGTH 128 // in ticks; 4096 ms at CONTROL_RATE=64
+#define MAX_STEP_LENGTH 128 // in ticks; 4096 ms at CONTROL_RATE=64
 #define BUTTON_PIN 3                     
 #define PRESSED LOW
-#define MIN_ANALOG_CHANGE 3
+#define MIN_ANALOG_CHANGE 2
 #define REST 99
 #define MELODY_LENGTH 16  // must be a power of 2 for easier modulo operation
 #define BUTTON_DEBOUCER_BYTE 0x1F // 
@@ -46,6 +47,8 @@
 // Mozzi oscillators + low pass filter
 //=============================================================================
 Oscil<SAW8192_NUM_CELLS, AUDIO_RATE> aPad(SAW8192_DATA); 
+//Oscil<TRIANGLE_HERMES_2048_NUM_CELLS, AUDIO_RATE> aPad(TRIANGLE_HERMES_2048_DATA); 
+
 Oscil<SMOOTHSQUARE8192_NUM_CELLS, AUDIO_RATE> aBass(SMOOTHSQUARE8192_DATA);
 //Oscil<SIN2048_NUM_CELLS, CONTROL_RATE> lfo(SIN2048_DATA);
 //Oscil<SIN8192_NUM_CELLS, AUDIO_RATE> aBass(SIN8192_DATA);
@@ -58,18 +61,18 @@ ADSR<CONTROL_RATE, CONTROL_RATE> envelope;
 const byte scaleLength = 12;
 const byte numScales = 6;
 const byte scales[numScales][scaleLength] = {
-  {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60}, //
-  {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51}, // 
-  {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55}, // 
-  {36, 38, 40, 42, 43, 45, 47, 50, 52, 54, 55, 57}, // 
-  {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51}, // 
-  {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52}  // 
+  {33, 36, 38, 40, 43, 45, 48, 50, 52, 55, 57, 60}, // A minor pentatonic scale (A, C, D, E, G)
+  {33, 35, 36, 38, 40, 41, 43, 45, 47, 48, 50, 51}, // A natural minor (Aeolian) scale (A, B, C, D, E, F, G)
+  {33, 36, 38, 39, 40, 43, 45, 48, 50, 51, 52, 55}, // A minor blues scale (A, C, D, D#, E, G)
+  {33, 35, 37, 39, 40, 42, 44, 47, 49, 51, 52, 54}, // A Lydian scale (A, B, C#, D#, E, F#, G#)
+  {33, 34, 36, 38, 40, 41, 43, 45, 46, 48, 50, 51}, // A Phrygian scale (A, Bb, C, D, E, F, G)
+  {33, 35, 36, 38, 40, 42, 43, 45, 47, 48, 50, 52}  // A Dorian scale (A, B, C, D, E, F#, G)
 };
 
 // Steps for melody generation
 //=============================================================================
-const byte numOffsets = 9;
-const int offsets[numOffsets] = {-2, 2, -1, -1, 1, 1, 0, REST, REST};
+const byte numOffsets = 15;
+const int offsets[numOffsets] = {3, -3, -2, -2, 2, 2, -1, -1, -1, 1, 1, 1, 3, 0, 0};
 
 
 // Variables
@@ -87,19 +90,21 @@ unsigned long shortPressThreshold = 800000; // 800 ms in microseconds
 unsigned int ticks = 0;
 byte currentScale = 0; 
 byte melody[MELODY_LENGTH];
+byte rests[MELODY_LENGTH];
 byte melodyStep = 0;
 
 // Configurable parameters
 unsigned long mixPot = 512; // 0: only bass, 1023: only pad
-unsigned int stepLength = 300; // in ticks
-byte swing = 0; // 0: no swing, 128: 50% swing (max)
+unsigned int stepLength = 20; // in ticks
+byte swing = 50; // 0: no swing, 128: 50% swing (max)
 unsigned long env = 0;
-unsigned long bassGain = 200; // 0: silent, 1023: full volume
-unsigned long padGain = 200; // 0: silent, 1023: full volume
-int noteLength = 100; // in ticks
+unsigned long bassGain = 500; // 0: silent, 1023: full volume
+unsigned long padGain = 500; // 0: silent, 1023: full volume
+int noteLength = 40; // in ticks
 byte noteOffset = 0; // MIDI note offset for the scale (0..20)
 byte mutationSpeed = 20; // in ticks
 bool noteActive = false;
+byte restDensity = 30;
 
 
 // Functions
@@ -110,9 +115,9 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);          
   randomSeed(analogRead(A5));            
   startMozzi(CONTROL_RATE);
-  lpf.setResonance(140); 
+  lpf.setResonance(180); 
   envelope.setLevels(255, 255, 255, 0);
-  envelope.setTimes(120, 10, 65535, 500);
+  envelope.setTimes(40, 20, 65535, 500);
   generateNewMelody();
  //  Serial.begin(9600);
 }
@@ -139,10 +144,21 @@ byte generateNewNoteIndex(byte idx) {
 
 
 void generateNewMelody() {
-  byte noteIdx = random(0, scaleLength);
-  for (int i = 0; i < MELODY_LENGTH; i++) {
+  byte noteIdx = 0; 
+    melody[1] = noteIdx;
+    melody[MELODY_LENGTH-2] = noteIdx;
+    melody[MELODY_LENGTH-1] = noteIdx;
+  for (int i = 1; i < MELODY_LENGTH-2; i++) {
     noteIdx = generateNewNoteIndex(noteIdx);
     melody[i] = noteIdx;
+  }
+  restDensity = random(12,40);
+  for (int i = 1; i < MELODY_LENGTH; i++) {
+  if (random(0, 99) < restDensity) {
+      rests[i] = REST;
+    }  else {
+      rests[i] = 0;
+    }
   }
 }
 
@@ -151,12 +167,18 @@ void mutateMelody() {
   byte pos = random(0, MELODY_LENGTH);
   byte idx = melody[pos];
   melody[pos] = generateNewNoteIndex(idx);
+  pos = random(1, MELODY_LENGTH);
+  if (random(0, 99) < restDensity) {
+      rests[pos] = REST;
+  }  else {
+      rests[pos] = 0;
+  }
 }
 
 
 void nextNote(){
-  if (melody[melodyStep] != REST) {
-    aPad.setFreq(mtof(noteOffset scales[currentScale][melody[melodyStep]]));
+  if (rests[melodyStep] != REST) {
+    aPad.setFreq(mtof(noteOffset + 7 + scales[currentScale][melody[melodyStep]]));
     aBass.setFreq(mtof(noteOffset + scales[currentScale][melody[melodyStep]])); 
     envelope.noteOn();
     noteActive = true;
@@ -215,9 +237,9 @@ void updateControl() {
   if (abs(newA2 - oldA2) > MIN_ANALOG_CHANGE) {
     oldA2 = newA2;
     if (buttonState == PRESSED) {
-      envelope.setReleaseTime( newA2 ); 
-    } else {
       noteOffset = map( newA2, 0, 1023, 0, 20 );  //0..255 
+    } else {
+      envelope.setReleaseTime( newA2 ); 
     }
   }
 
@@ -239,7 +261,7 @@ void updateControl() {
   ticks++;
 
   int swingOffset = (swing * stepLength) >> 8;
-  int finaltick = stepLength + ((melodyStep % 2 == 0) ? swingOffset : -swingOffset);
+  int finaltick = stepLength + ((melodyStep % 2 != 0) ? swingOffset : -swingOffset);
   
   if (noteActive && (ticks >= noteLength)) {
     envelope.noteOff();
