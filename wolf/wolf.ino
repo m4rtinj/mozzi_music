@@ -71,8 +71,8 @@ const byte scales[numScales][scaleLength] = {
 
 // Steps for melody generation
 //=============================================================================
-const byte numOffsets = 15;
-const int offsets[numOffsets] = {3, -3, -2, -2, 2, 2, -1, -1, -1, 1, 1, 1, 3, 0, 0};
+const byte numOffsets = 16;
+const int offsets[numOffsets] = {3, -3, -2, 2, 2, -1, -1, -1, -1, -1, 1, 1, 1, 0, 0, 0};
 
 
 // Variables
@@ -98,10 +98,10 @@ unsigned long mixPot = 512; // 0: only bass, 1023: only pad
 unsigned int stepLength = 20; // in ticks
 byte swing = 50; // 0: no swing, 128: 50% swing (max)
 unsigned long env = 0;
-unsigned long bassGain = 500; // 0: silent, 1023: full volume
-unsigned long padGain = 500; // 0: silent, 1023: full volume
-int noteLength = 40; // in ticks
-byte noteOffset = 0; // MIDI note offset for the scale (0..20)
+unsigned long bassGain = 450; // 0: silent, 1023: full volume
+unsigned long padGain = 570; // 0: silent, 1023: full volume
+int noteLength = 10; // in ticks
+byte noteOffset = 10; // MIDI note offset for the scale (0..20)
 byte mutationSpeed = 20; // in ticks
 bool noteActive = false;
 byte restDensity = 30;
@@ -116,6 +116,7 @@ void setup() {
   randomSeed(analogRead(A5));            
   startMozzi(CONTROL_RATE);
   lpf.setResonance(180); 
+  lpf.setCutoffFreq(160); 
   envelope.setLevels(255, 255, 255, 0);
   envelope.setTimes(40, 20, 65535, 500);
   generateNewMelody();
